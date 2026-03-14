@@ -54,11 +54,14 @@ public final class DemucsSeparator: @unchecked Sendable {
     /// - Parameters:
     ///   - url: Path to the audio file to separate.
     ///   - cancelToken: Optional token to request cancellation. Call `cancel()` on it to stop.
+    ///   - interpolateProgress: If `true` (default), smoothly interpolates progress during GPU batch
+    ///     execution gaps. If `false`, only reports raw progress updates from model sub-steps.
     ///   - progress: Optional progress callback. Called on the **main queue**.
     ///   - completion: Called on the **main queue** with the result or error.
     public func separate(
         fileAt url: URL,
         cancelToken: DemucsCancelToken?,
+        interpolateProgress: Bool = true,
         progress: (@Sendable (_ progress: DemucsSeparationProgress) -> Void)?,
         completion: @escaping @Sendable (_ result: Result<DemucsSeparationResult, Error>) -> Void
     ) {
@@ -69,7 +72,7 @@ public final class DemucsSeparator: @unchecked Sendable {
 
             // Create interpolator for smooth progress during GPU batch gaps
             let interpolator: ProgressInterpolator?
-            if let progressCopy {
+            if interpolateProgress, let progressCopy {
                 interpolator = ProgressInterpolator(callback: progressCopy)
             } else {
                 interpolator = nil
@@ -79,9 +82,9 @@ public final class DemucsSeparator: @unchecked Sendable {
                 let audio = try AudioIO.loadAudio(from: url)
                 let monitor = SeparationMonitor(
                     cancelToken: cancelToken,
-                    progressHandler: { fraction, stage in
-                        interpolator?.onProgress(fraction, stage: stage)
-                    }
+                    progressHandler: interpolator != nil
+                        ? { @Sendable fraction, stage in interpolator?.onProgress(fraction, stage: stage) }
+                        : Self.makeDirectProgressHandler(progressCopy)
                 )
                 let separationResult = try self.separate(audio: audio, monitor: monitor)
                 result = .success(separationResult)
@@ -101,11 +104,14 @@ public final class DemucsSeparator: @unchecked Sendable {
     /// - Parameters:
     ///   - audio: The audio data to separate.
     ///   - cancelToken: Optional token to request cancellation.
+    ///   - interpolateProgress: If `true` (default), smoothly interpolates progress during GPU batch
+    ///     execution gaps. If `false`, only reports raw progress updates from model sub-steps.
     ///   - progress: Optional progress callback. Called on the **main queue**.
     ///   - completion: Called on the **main queue** with the result or error.
     public func separate(
         audio: DemucsAudio,
         cancelToken: DemucsCancelToken?,
+        interpolateProgress: Bool = true,
         progress: (@Sendable (_ progress: DemucsSeparationProgress) -> Void)?,
         completion: @escaping @Sendable (_ result: Result<DemucsSeparationResult, Error>) -> Void
     ) {
@@ -115,7 +121,7 @@ public final class DemucsSeparator: @unchecked Sendable {
             let result: Result<DemucsSeparationResult, Error>
 
             let interpolator: ProgressInterpolator?
-            if let progressCopy {
+            if interpolateProgress, let progressCopy {
                 interpolator = ProgressInterpolator(callback: progressCopy)
             } else {
                 interpolator = nil
@@ -124,9 +130,9 @@ public final class DemucsSeparator: @unchecked Sendable {
             do {
                 let monitor = SeparationMonitor(
                     cancelToken: cancelToken,
-                    progressHandler: { fraction, stage in
-                        interpolator?.onProgress(fraction, stage: stage)
-                    }
+                    progressHandler: interpolator != nil
+                        ? { @Sendable fraction, stage in interpolator?.onProgress(fraction, stage: stage) }
+                        : Self.makeDirectProgressHandler(progressCopy)
                 )
                 let separationResult = try self.separate(audio: audio, monitor: monitor)
                 result = .success(separationResult)
@@ -139,6 +145,29 @@ public final class DemucsSeparator: @unchecked Sendable {
                 completionCopy(result)
             })
         })
+    }
+
+    // MARK: - Progress Helpers
+
+    /// Creates a direct (non-interpolated) progress handler that dispatches raw progress to the main queue.
+    private static func makeDirectProgressHandler(
+        _ callback: (@Sendable (DemucsSeparationProgress) -> Void)?
+    ) -> (@Sendable (Float, String) -> Void)? {
+        guard let callback else { return nil }
+        let startTime = CFAbsoluteTimeGetCurrent()
+        return { fraction, stage in
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            let eta: TimeInterval? = fraction > 0.02 ? elapsed / Double(fraction) * Double(1 - fraction) : nil
+            let progress = DemucsSeparationProgress(
+                fraction: fraction,
+                stage: stage,
+                elapsedTime: elapsed,
+                estimatedTimeRemaining: eta
+            )
+            DispatchQueue.main.async {
+                callback(progress)
+            }
+        }
     }
 
     // MARK: - Internal

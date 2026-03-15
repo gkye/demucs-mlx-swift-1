@@ -35,13 +35,13 @@ public final class DemucsSeparator: @unchecked Sendable {
         self.parameters = try parameters.validated()
     }
 
-    public func separate(fileAt url: URL, includeInput: Bool = false) throws -> DemucsSeparationResult {
+    public func separate(fileAt url: URL) throws -> DemucsSeparationResult {
         let audio = try AudioIO.loadAudio(from: url)
-        return try separate(audio: audio, includeInput: includeInput)
+        return try separate(audio: audio)
     }
 
-    public func separate(audio: DemucsAudio, includeInput: Bool = false) throws -> DemucsSeparationResult {
-        return try self.separate(audio: audio, includeInput: includeInput, monitor: nil)
+    public func separate(audio: DemucsAudio) throws -> DemucsSeparationResult {
+        return try self.separate(audio: audio, monitor: nil)
     }
 
     // MARK: - Closure-Based Async API
@@ -61,7 +61,6 @@ public final class DemucsSeparator: @unchecked Sendable {
     public func separate(
         fileAt url: URL,
         cancelToken: DemucsCancelToken?,
-        includeInput: Bool = false,
         interpolateProgress: Bool = true,
         progress: (@Sendable (_ progress: DemucsSeparationProgress) -> Void)?,
         completion: @escaping @Sendable (_ result: Result<DemucsSeparationResult, Error>) -> Void
@@ -87,7 +86,7 @@ public final class DemucsSeparator: @unchecked Sendable {
                         ? { @Sendable fraction, stage in interpolator?.onProgress(fraction, stage: stage) }
                         : Self.makeDirectProgressHandler(progressCopy)
                 )
-                let separationResult = try self.separate(audio: audio, includeInput: includeInput, monitor: monitor)
+                let separationResult = try self.separate(audio: audio, monitor: monitor)
                 result = .success(separationResult)
             }
             catch {
@@ -112,7 +111,6 @@ public final class DemucsSeparator: @unchecked Sendable {
     public func separate(
         audio: DemucsAudio,
         cancelToken: DemucsCancelToken?,
-        includeInput: Bool = false,
         interpolateProgress: Bool = true,
         progress: (@Sendable (_ progress: DemucsSeparationProgress) -> Void)?,
         completion: @escaping @Sendable (_ result: Result<DemucsSeparationResult, Error>) -> Void
@@ -136,7 +134,7 @@ public final class DemucsSeparator: @unchecked Sendable {
                         ? { @Sendable fraction, stage in interpolator?.onProgress(fraction, stage: stage) }
                         : Self.makeDirectProgressHandler(progressCopy)
                 )
-                let separationResult = try self.separate(audio: audio, includeInput: includeInput, monitor: monitor)
+                let separationResult = try self.separate(audio: audio, monitor: monitor)
                 result = .success(separationResult)
             }
             catch {
@@ -174,7 +172,7 @@ public final class DemucsSeparator: @unchecked Sendable {
 
     // MARK: - Internal
 
-    private func separate(audio: DemucsAudio, includeInput: Bool, monitor: SeparationMonitor?) throws -> DemucsSeparationResult {
+    private func separate(audio: DemucsAudio, monitor: SeparationMonitor?) throws -> DemucsSeparationResult {
         let validated = try parameters.validated()
 
         try monitor?.checkCancellation()
@@ -195,11 +193,11 @@ public final class DemucsSeparator: @unchecked Sendable {
             frames: audio.frameCount
         )
 
-        let normalizedAudio: DemucsAudio? = includeInput ? try DemucsAudio(
+        let normalizedAudio = try DemucsAudio(
             channelMajor: resampled.samples,
             channels: descriptor.audioChannels,
             sampleRate: descriptor.sampleRate
-        ) : nil
+        )
 
         try monitor?.checkCancellation()
         monitor?.reportProgress(0.0, stage: "Starting separation")

@@ -581,7 +581,6 @@ final class HTDemucsGraph: Module {
                 let tdecoded = tdecoder[idx - offset](xt, skip: skipT, length: lengthT)
                 xt = tdecoded.0
             }
-            MLX.eval(x)
             step += 1
         }
 

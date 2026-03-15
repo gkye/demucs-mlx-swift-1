@@ -145,14 +145,12 @@ public struct DemucsCLI: ParsableCommand {
                 guard let selectedAudio = result.stems[stem]
                 else { continue }
 
-                // Compute the complement by summing all other stems
-                let frameCount = selectedAudio.channels * selectedAudio.frameCount
-                var complementSamples = [Float](repeating: 0, count: frameCount)
-                for (source, audio) in result.stems where source != stem {
-                    let samples = audio.channelMajorSamples
-                    for i in 0..<frameCount {
-                        complementSamples[i] += samples[i]
-                    }
+                // Compute the complement: original mix minus the selected stem
+                let mixSamples = result.input.channelMajorSamples
+                let stemSamples = selectedAudio.channelMajorSamples
+                var complementSamples = [Float](repeating: 0, count: mixSamples.count)
+                for i in 0 ..< mixSamples.count {
+                    complementSamples[i] = mixSamples[i] - stemSamples[i]
                 }
 
                 let complementAudio = try DemucsAudio(

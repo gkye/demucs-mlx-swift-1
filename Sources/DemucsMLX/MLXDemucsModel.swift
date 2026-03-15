@@ -573,17 +573,14 @@ final class DemucsGraph: Module {
             x = lstmMod(x)
         }
 
-        // Decode with skip connections.
-        // Evaluate after each decoder step to bound peak memory — without this,
-        // all skip connections and decoder intermediates stay live in the lazy
-        // computation graph until resampleHalf forces evaluation.
+        // Decode with skip connections
         step += 1
         for (idx, dec) in decoder.enumerated() {
             monitor?.reportProgress(step / totalSteps, stage: "Decoder \(idx + 1)/\(config.depth)")
             try monitor?.checkCancellation()
-            let skip = demucsCenterTrim(saved.removeLast(), referenceLength: x.dim(-1))
+            var skip = saved.removeLast()
+            skip = demucsCenterTrim(skip, referenceLength: x.dim(-1))
             x = dec(x + skip)
-            MLX.eval(x)
             step += 1
         }
 

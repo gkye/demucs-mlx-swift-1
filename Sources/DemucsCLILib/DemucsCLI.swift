@@ -34,7 +34,7 @@ public struct DemucsCLI: ParsableCommand {
     public var seed: Int?
 
     @Option(name: [.short, .long], help: "Chunk batch size")
-    public var batchSize: Int = 8
+    public var batchSize: Int = 1
 
     @Flag(name: .customLong("no-split"), help: "Disable chunked overlap-add inference")
     public var noSplit: Bool = false

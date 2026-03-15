@@ -65,7 +65,7 @@ public struct DemucsSeparationParameters: Sendable {
         overlap: Float = 0.25,
         split: Bool = true,
         segmentSeconds: Double? = nil,
-        batchSize: Int = 8,
+        batchSize: Int = 1,
         seed: Int? = nil
     ) {
         self.shifts = shifts

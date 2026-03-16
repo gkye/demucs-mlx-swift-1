@@ -523,3 +523,178 @@ func fusedGroupNormGLU(
 
     return result.reshaped(outShape)
 }
+
+// MARK: - Fused Resample Kernels
+
+/// Metal kernel for upsample 2x: zero-insertion + reflect-pad + FIR filter.
+/// Input: [B*C, T], kernel: [numtaps], params: [T, numtaps]
+/// Output: [B*C, 2*T]
+/// Each thread computes one output sample.
+private let resample2xSource = """
+uint gid = thread_position_in_grid.x;
+uint T_in = params[0];
+uint numtaps = params[1];
+uint T_up = T_in * 2;
+uint total = params[2];  // B*C * T_up
+
+if (gid >= total) return;
+
+uint bc = gid / T_up;
+uint out_idx = gid % T_up;
+uint pad = numtaps / 2;
+
+// The FIR filter is applied to the zero-inserted + reflect-padded signal.
+// For output sample out_idx, we need padded samples at positions [out_idx .. out_idx+numtaps-1]
+// where padded = reflect_pad(zero_inserted(input), pad).
+// Zero-inserted signal: zi[2*i] = input[i], zi[2*i+1] = 0
+// Reflect-padded: extend zi with reflection at boundaries.
+
+float acc = 0.0f;
+uint base = bc * T_in;
+
+for (uint k = 0; k < numtaps; k++) {
+    // Position in the zero-inserted signal (before padding)
+    int zi_pos = (int)out_idx + (int)k - (int)pad;
+
+    // Reflect-pad boundary handling
+    if (zi_pos < 0) zi_pos = -zi_pos;
+    if (zi_pos >= (int)T_up) zi_pos = 2 * (int)T_up - 2 - zi_pos;
+    // Clamp for safety
+    zi_pos = max(0, min(zi_pos, (int)T_up - 1));
+
+    // Zero-inserted signal: only even positions have data
+    float sample = 0.0f;
+    if (zi_pos % 2 == 0) {
+        sample = (float)x[base + zi_pos / 2];
+    }
+    acc += sample * kernel[k];
+}
+
+out[gid] = (T)(acc * 2.0f);  // Scale by upsample factor
+"""
+
+nonisolated(unsafe) private var _resample2xKernel: MLXFast.MLXFastKernel? = nil
+
+private func getResample2xKernel() -> MLXFast.MLXFastKernel {
+    if let k = _resample2xKernel { return k }
+    let k = MLXFast.metalKernel(
+        name: "fused_resample2x",
+        inputNames: ["x", "kernel", "params"],
+        outputNames: ["out"],
+        source: resample2xSource
+    )
+    _resample2xKernel = k
+    return k
+}
+
+/// Metal kernel for downsample by 2: reflect-pad + FIR filter + decimate.
+/// Each thread computes one output sample.
+private let resampleHalfSource = """
+uint gid = thread_position_in_grid.x;
+uint T_in = params[0];
+uint numtaps = params[1];
+uint T_out = (T_in + 1) / 2;
+uint total = params[2];  // B*C * T_out
+
+if (gid >= total) return;
+
+uint bc = gid / T_out;
+uint out_idx = gid % T_out;
+uint pad = numtaps / 2;
+
+float acc = 0.0f;
+uint base = bc * T_in;
+
+// Output sample out_idx corresponds to input position 2*out_idx (decimation by 2)
+// With reflect-padded input, we convolve at position 2*out_idx
+for (uint k = 0; k < numtaps; k++) {
+    int src_pos = (int)(2 * out_idx) + (int)k - (int)pad;
+
+    // Reflect-pad boundary handling
+    if (src_pos < 0) src_pos = -src_pos;
+    if (src_pos >= (int)T_in) src_pos = 2 * (int)T_in - 2 - src_pos;
+    src_pos = max(0, min(src_pos, (int)T_in - 1));
+
+    acc += (float)x[base + src_pos] * kernel[k];
+}
+
+out[gid] = (T)acc;
+"""
+
+nonisolated(unsafe) private var _resampleHalfKernel: MLXFast.MLXFastKernel? = nil
+
+private func getResampleHalfKernel() -> MLXFast.MLXFastKernel {
+    if let k = _resampleHalfKernel { return k }
+    let k = MLXFast.metalKernel(
+        name: "fused_resample_half",
+        inputNames: ["x", "kernel", "params"],
+        outputNames: ["out"],
+        source: resampleHalfSource
+    )
+    _resampleHalfKernel = k
+    return k
+}
+
+/// Precomputed 63-tap Hann-windowed sinc lowpass FIR kernel (cutoff=0.25).
+nonisolated(unsafe) private let resampleFIRKernel: MLXArray = {
+    let numtaps = 63
+    let cutoff: Float = 0.25
+    let half = (numtaps - 1) / 2
+    var h = [Float](repeating: 0, count: numtaps)
+    for n in 0..<numtaps {
+        let tn = Float(n - half)
+        let sinc: Float = tn == 0 ? 1.0 : sin(Float.pi * 2.0 * cutoff * tn) / (Float.pi * 2.0 * cutoff * tn)
+        let window: Float = 0.5 - 0.5 * cos(2.0 * Float.pi * Float(n) / Float(numtaps - 1))
+        h[n] = 2.0 * cutoff * sinc * window
+    }
+    let sum = h.reduce(0, +)
+    return MLXArray(h.map { $0 / sum })
+}()
+
+/// GPU-native upsample by 2 using a fused Metal kernel.
+/// Input shape: [B, C, T] → Output shape: [B, C, 2*T]
+func metalResample2x(_ x: MLXArray) -> MLXArray {
+    let b = x.dim(0)
+    let c = x.dim(1)
+    let t = x.dim(2)
+    let upT = 2 * t
+    let total = b * c * upT
+
+    let xFlat = contiguous(x.reshaped([b * c, t]))
+    let params = MLXArray([Int32(t), Int32(63), Int32(total)])
+
+    let resultFlat = getResample2xKernel()(
+        [xFlat, resampleFIRKernel, params],
+        template: [("T", x.dtype)],
+        grid: (total, 1, 1),
+        threadGroup: (min(256, total), 1, 1),
+        outputShapes: [[b * c * upT]],
+        outputDTypes: [x.dtype]
+    )[0]
+
+    return resultFlat.reshaped([b, c, upT])
+}
+
+/// GPU-native downsample by 2 using a fused Metal kernel.
+/// Input shape: [B, C, T] → Output shape: [B, C, (T+1)/2]
+func metalResampleHalf(_ x: MLXArray) -> MLXArray {
+    let b = x.dim(0)
+    let c = x.dim(1)
+    let t = x.dim(2)
+    let outT = (t + 1) / 2
+    let total = b * c * outT
+
+    let xFlat = contiguous(x.reshaped([b * c, t]))
+    let params = MLXArray([Int32(t), Int32(63), Int32(total)])
+
+    let resultFlat = getResampleHalfKernel()(
+        [xFlat, resampleFIRKernel, params],
+        template: [("T", x.dtype)],
+        grid: (total, 1, 1),
+        threadGroup: (min(256, total), 1, 1),
+        outputShapes: [[b * c * outT]],
+        outputDTypes: [x.dtype]
+    )[0]
+
+    return resultFlat.reshaped([b, c, outT])
+}

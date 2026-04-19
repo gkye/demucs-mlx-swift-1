@@ -213,17 +213,15 @@ public final class DemucsSeparator: @unchecked Sendable {
         try monitor?.checkCancellation()
         monitor?.reportProgress(1.0, stage: "Complete")
 
+        // stemsFlat is laid out as [source][channel][frame], contiguous. Each source's slice
+        // is already the channel-major layout DemucsAudio expects, so we bulk-copy the slice
+        // instead of scalar-looping 72M+ samples (which dominates the post-inference "Complete"
+        // stage in Debug builds).
+        let perSourceCount = descriptor.audioChannels * resampled.frames
         var stems: [String: DemucsAudio] = [:]
         for (sourceIndex, sourceName) in descriptor.sourceNames.enumerated() {
-            var sourceSamples = [Float](repeating: 0, count: descriptor.audioChannels * resampled.frames)
-
-            for c in 0..<descriptor.audioChannels {
-                let sourceBase = (sourceIndex * descriptor.audioChannels + c) * resampled.frames
-                let dstBase = c * resampled.frames
-                for t in 0..<resampled.frames {
-                    sourceSamples[dstBase + t] = stemsFlat[sourceBase + t]
-                }
-            }
+            let sourceStart = sourceIndex * perSourceCount
+            let sourceSamples = Array(stemsFlat[sourceStart..<(sourceStart + perSourceCount)])
 
             stems[sourceName] = try DemucsAudio(
                 channelMajor: sourceSamples,

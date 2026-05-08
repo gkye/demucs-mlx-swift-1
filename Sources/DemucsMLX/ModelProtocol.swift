@@ -167,14 +167,14 @@ enum DemucsModelFactory {
     }
 
     /// Apply post-load quantization to a model graph's Linear layers.
-    private static func applyQuantizationIfRequested(_ graph: Module) {
+    private static func applyQuantizationIfRequested(_ graph: Module) throws {
         guard let bitsStr = ProcessInfo.processInfo.environment["DEMUCS_QUANTIZE_BITS"],
               let bits = Int(bitsStr), [4, 8].contains(bits) else { return }
         let groupSize = Int(ProcessInfo.processInfo.environment["DEMUCS_QUANTIZE_GROUP_SIZE"] ?? "64") ?? 64
         MLXNN.quantize(model: graph, groupSize: groupSize, bits: bits) { _, module in
             module is Linear
         }
-        MLX.eval(graph.parameters())
+        try MLX.checkedEval(graph.parameters())
     }
 
     /// Build and load weights into a single model graph.
@@ -189,8 +189,8 @@ enum DemucsModelFactory {
             let cfg = try HTDemucsRuntimeConfig.fromJSON(config)
             let graph = HTDemucsGraph(config: cfg)
             try graph.update(parameters: ModuleParameters.unflattened(weights), verify: .all)
-            applyQuantizationIfRequested(graph)
-            MLX.eval(graph.parameters())
+            try applyQuantizationIfRequested(graph)
+            try MLX.checkedEval(graph.parameters())
             let updatedDescriptor = DemucsModelDescriptor(
                 name: descriptor.name,
                 sourceNames: cfg.sources,
@@ -204,8 +204,8 @@ enum DemucsModelFactory {
             let cfg = try HDemucsRuntimeConfig.fromJSON(config)
             let graph = HDemucsGraph(config: cfg)
             try graph.update(parameters: ModuleParameters.unflattened(weights), verify: .all)
-            applyQuantizationIfRequested(graph)
-            MLX.eval(graph.parameters())
+            try applyQuantizationIfRequested(graph)
+            try MLX.checkedEval(graph.parameters())
             let updatedDescriptor = DemucsModelDescriptor(
                 name: descriptor.name,
                 sourceNames: cfg.sources,
@@ -219,8 +219,8 @@ enum DemucsModelFactory {
             let cfg = try DemucsRuntimeConfig.fromJSON(config)
             let graph = DemucsGraph(config: cfg)
             try graph.update(parameters: ModuleParameters.unflattened(weights), verify: .all)
-            applyQuantizationIfRequested(graph)
-            MLX.eval(graph.parameters())
+            try applyQuantizationIfRequested(graph)
+            try MLX.checkedEval(graph.parameters())
             let updatedDescriptor = DemucsModelDescriptor(
                 name: descriptor.name,
                 sourceNames: cfg.sources,
@@ -278,7 +278,7 @@ final class HTDemucsModelWrapper: StemSeparationModel, GPUPredictable {
     func predict(batchData: [Float], batchSize: Int, channels: Int, frames: Int, monitor: SeparationMonitor? = nil) throws -> [Float] {
         let input = MLXArray(batchData).reshaped([batchSize, channels, frames])
         let output = try predictGPU(input: input, monitor: monitor)
-        MLX.eval(output)
+        try MLX.checkedEval(output)
         return output.asArray(Float.self)
     }
 }
@@ -300,7 +300,7 @@ final class HDemucsModelWrapper: StemSeparationModel, GPUPredictable {
     func predict(batchData: [Float], batchSize: Int, channels: Int, frames: Int, monitor: SeparationMonitor? = nil) throws -> [Float] {
         let input = MLXArray(batchData).reshaped([batchSize, channels, frames])
         let output = try predictGPU(input: input, monitor: monitor)
-        MLX.eval(output)
+        try MLX.checkedEval(output)
         return output.asArray(Float.self)
     }
 }
@@ -322,7 +322,7 @@ final class DemucsModelWrapper: StemSeparationModel, GPUPredictable {
     func predict(batchData: [Float], batchSize: Int, channels: Int, frames: Int, monitor: SeparationMonitor? = nil) throws -> [Float] {
         let input = MLXArray(batchData).reshaped([batchSize, channels, frames])
         let output = try predictGPU(input: input, monitor: monitor)
-        MLX.eval(output)
+        try MLX.checkedEval(output)
         return output.asArray(Float.self)
     }
 }

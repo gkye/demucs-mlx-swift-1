@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 
 public final class DemucsSeparator: @unchecked Sendable {
     public let modelName: String
@@ -173,6 +174,16 @@ public final class DemucsSeparator: @unchecked Sendable {
     // MARK: - Internal
 
     private func separate(audio: DemucsAudio, monitor: SeparationMonitor?) throws -> DemucsSeparationResult {
+        // Safety net: any synchronous MLX C++ error inside this block is converted
+        // to a Swift throw. Without this, MLX's default behaviour is to call
+        // `fatalError`, which crashes the app instead of letting the caller
+        // present an error to the user.
+        try MLX.withError {
+            try _separate(audio: audio, monitor: monitor)
+        }
+    }
+
+    private func _separate(audio: DemucsAudio, monitor: SeparationMonitor?) throws -> DemucsSeparationResult {
         let validated = try parameters.validated()
 
         try monitor?.checkCancellation()

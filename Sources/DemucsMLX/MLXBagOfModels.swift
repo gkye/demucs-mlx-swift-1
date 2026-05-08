@@ -99,7 +99,11 @@ final class BagOfModels: StemSeparationModel {
         let totalArray = MLXArray(totals).reshaped([1, sourceCount, 1, 1])
         let normalized = result / MLX.maximum(totalArray, MLXArray(Float(1e-8)))
 
-        MLX.eval(normalized)
+        // checkedEval routes MLX C++ errors (e.g. Metal command buffer failure
+        // or shader compile failure) through `withError`, turning them into Swift
+        // throws. Plain `eval` lets MLX call its global error handler, which
+        // defaults to fatalError → process crash.
+        try MLX.checkedEval(normalized)
         return normalized.asArray(Float.self)
     }
 }

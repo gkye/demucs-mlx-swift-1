@@ -658,7 +658,7 @@ final class NativeHTDemucsModel: StemSeparationModel {
         }
 
         try graph.update(parameters: ModuleParameters.unflattened(stripped), verify: .all)
-        MLX.eval(graph.parameters())
+        try MLX.checkedEval(graph.parameters())
     }
 
     func predict(
@@ -670,7 +670,7 @@ final class NativeHTDemucsModel: StemSeparationModel {
     ) throws -> [Float] {
         let input = MLXArray(batchData).reshaped([batchSize, channels, frames])
         let output = try graph.forward(input, monitor: monitor)
-        MLX.eval(output)
+        try MLX.checkedEval(output)
         return output.asArray(Float.self)
     }
 }

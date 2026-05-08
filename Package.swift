@@ -12,7 +12,7 @@ let package = Package(
         .executable(name: "demucs-mlx-swift", targets: ["DemucsCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.31.3")),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
     ],
